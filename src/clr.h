@@ -75,15 +75,29 @@ size_t clr_state_size(void);
  * P is invertible, but P(S) xor S is not: a captured state cannot be run
  * backwards to earlier output (backtracking resistance).  External entropy
  * (clr_dual_absorb) enters through the interior twin.
+ *
+ * Occluded mode (clr_dual_init_occluded) seeds the twin from OS entropy and
+ * reseeds it from OS entropy every `reseed_every` blocks.  The output is then
+ * not a function of `seed` at all: guessing the seed reproduces nothing, but
+ * nobody (including the caller) can reproduce the stream.  clr_dual_init is
+ * the reproducible mode: output depends on `seed` only.
  */
+#define CLR_RESEED_BLOCKS 64            /* occluded mode: OS reseed of the twin every 2 KiB of output */
+
 typedef struct clr_dual {
     clr_state a;                        /* exterior generator */
     clr_state b;                        /* interior twin, never output */
     uint32_t  buf_pos;
     uint8_t   buf[CLR_BLOCK];
+    uint32_t  reseed_every;             /* 0 = reproducible mode */
+    uint32_t  since_reseed;
 } clr_dual;
 
 void clr_dual_init(clr_dual *d, const void *seed, size_t len, uint32_t rounds);
+void clr_dual_init_occluded(clr_dual *d, const void *seed, size_t len, uint32_t rounds, uint32_t reseed_every);
+
+/* Fill buf from the OS (getentropy); aborts rather than continue without entropy. */
+void clr_os_entropy(void *buf, size_t len);
 void clr_dual_absorb(clr_dual *d, const void *data, size_t len);
 void clr_dual_block(clr_dual *d, uint8_t out[CLR_BLOCK]);
 void clr_dual_fill(clr_dual *d, void *out, size_t len);

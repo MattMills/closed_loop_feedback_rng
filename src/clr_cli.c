@@ -1,11 +1,15 @@
 /*
  * clr -- stream generator output.
  *
- *   clr [--single] [--seed TEXT | --seed-hex HEX] [--rounds N] [--bytes N | --hex N]
+ *   clr [--reproducible | --single] [--seed TEXT | --seed-hex HEX] [--rounds N] [--bytes N | --hex N]
  *
- * Default is the dual generator (clr_dual_*); --single uses one bare CLR loop.
- * With no --bytes/--hex, raw bytes are written to stdout until the pipe closes
- * (e.g. `clr | RNG_test stdin`).  With no seed, 32 bytes from /dev/urandom.
+ * Default is the dual generator in occluded mode: the interior twin is seeded
+ * and periodically reseeded from OS entropy, so the output is not reproducible
+ * from the seed.  --reproducible makes the dual generator depend on the seed
+ * only (tests, known-answer vectors); --single uses one bare CLR loop, also
+ * reproducible.  With no --bytes/--hex, raw bytes are written to stdout until
+ * the pipe closes (e.g. `clr | RNG_test stdin`).  With no seed, 32 bytes from
+ * /dev/urandom.
  */
 #include "clr.h"
 
@@ -15,7 +19,7 @@
 
 static void usage(void)
 {
-    fprintf(stderr, "usage: clr [--single] [--seed TEXT | --seed-hex HEX] [--rounds N] [--bytes N | --hex N]\n");
+    fprintf(stderr, "usage: clr [--reproducible | --single] [--seed TEXT | --seed-hex HEX] [--rounds N] [--bytes N | --hex N]\n");
     exit(2);
 }
 
@@ -31,7 +35,7 @@ int main(int argc, char **argv)
 {
     uint8_t seed[4096];
     size_t seed_len = 0;
-    int have_seed = 0, hex = 0, single = 0;
+    int have_seed = 0, hex = 0, single = 0, reproducible = 0;
     unsigned long rounds = 0;
     unsigned long long count = 0;
     int bounded = 0;
@@ -39,6 +43,8 @@ int main(int argc, char **argv)
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--single")) {
             single = 1;
+        } else if (!strcmp(argv[i], "--reproducible")) {
+            reproducible = 1;
         } else if (!strcmp(argv[i], "--seed") && i + 1 < argc) {
             seed_len = strlen(argv[++i]);
             if (seed_len > sizeof seed) usage();
@@ -81,8 +87,10 @@ int main(int argc, char **argv)
     static clr_dual dual;
     if (single)
         clr_init(&st, seed, seed_len, (uint32_t)rounds);
-    else
+    else if (reproducible)
         clr_dual_init(&dual, seed, seed_len, (uint32_t)rounds);
+    else
+        clr_dual_init_occluded(&dual, seed, seed_len, (uint32_t)rounds, 0);
     memset(seed, 0, sizeof seed);
 
     uint8_t buf[1 << 16];

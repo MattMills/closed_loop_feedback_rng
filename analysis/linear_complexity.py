@@ -56,7 +56,7 @@ def cli_bits(binary, rounds, nblocks, bit=0, single=True):
     that sequence obeys a recurrence no longer than the state.
     """
     args = [os.path.join(ROOT, "build", binary), "--seed", "linear-complexity",
-            "--rounds", str(rounds), "--bytes", str(32 * nblocks)] + (["--single"] if single else [])
+            "--rounds", str(rounds), "--bytes", str(32 * nblocks)] + (["--single"] if single else ["--reproducible"])
     out = subprocess.run(args, check=True, capture_output=True).stdout
     return [(out[32 * t + bit // 8] >> (bit % 8)) & 1 for t in range(nblocks)]
 
@@ -76,8 +76,8 @@ CASES = [
     ("single loop, 1 pass per block, output bit 0", lambda n: cli_bits("clr", 1, n, 0)),
     ("single loop, 8 passes per block, output bit 0", lambda n: cli_bits("clr", 8, n, 0)),
     ("single loop, 8 passes per block, output bit 137", lambda n: cli_bits("clr", 8, n, 137)),
-    ("dual (default), output bit 0", lambda n: cli_bits("clr", 8, n, 0, False)),
-    ("dual (default), output bit 137", lambda n: cli_bits("clr", 8, n, 137, False)),
+    ("dual, reproducible mode, output bit 0", lambda n: cli_bits("clr", 8, n, 0, False)),
+    ("dual, reproducible mode, output bit 137", lambda n: cli_bits("clr", 8, n, 137, False)),
 ]
 
 print(f"Berlekamp-Massey on the first {N} bits of each sequence, then predict the next {TEST}")

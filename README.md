@@ -10,8 +10,11 @@ outputs but never appear in the output.
 Two of these loops run as a pair. One is the exterior generator; the other is
 an interior twin that is never output. The pair reseeds each other in a
 second-order XOR loop, and each block closes with a feed-forward self-mix, so
-a captured state can't be run backwards. The dual generator is the default
-(`clr_dual_*`, `./build/clr`); `--single` selects one bare loop.
+a captured state can't be run backwards. By default the twin is occluded: it
+is seeded, and reseeded every 2 KiB of output, from OS entropy that never
+leaves it, so the output is not a function of the seed. The dual generator in
+occluded mode is the default (`./build/clr`); `--reproducible` makes the output
+depend on the seed only, and `--single` selects one bare loop.
 
 > Status: experimental design. It passes every attack in `analysis/` (below),
 > but it has not been independently cryptanalysed, and passing tests is not a
@@ -59,6 +62,7 @@ Total hidden state: 4 × 512 + 122 = 2170 bits.
 | Dual generator, operating independently | A (exterior) and B (interior twin) are complete CLR loops with their own lattices and Gold pairs, seeded with domain separation |
 | Continuous reseeding in a second-order loop | Every pass, each generator's deepest layer is XORed with the other's interior layer, through different cell permutations so they never mirror each other |
 | Exterior interiority | B is never output, and the coupling only touches interior layers (L2, L3). B reaches the output only by being buried through A's own loop. External entropy (`clr_dual_absorb`) enters through B |
+| Occluded internal reseeding (default) | `clr_dual_init_occluded` absorbs 32 bytes of OS entropy (`getentropy`) into B at start, and again every 64 blocks. The seed goes to A; the entropy goes only to B, so the output depends on both and can't be regenerated from the seed |
 | Multi-order XOR loop that closes, then self-mixes | Each block applies `S ← P(S) ⊕ S` to the joint 4340-bit state, where `P` is the 8 coupled passes. `P` is invertible; the feed-forward XOR of the state with its own starting value is what makes the step one-way |
 
 Iterating a one-way step merges states, but slowly: the joint state keeps
@@ -103,7 +107,7 @@ on 12,000 bits, then predict the next 4,000.
 | Dual, linear control, per output bit | 4336 | 100% |
 | Single loop, 1 pass per block | 5999 (random: ~6000) | 48.5% |
 | Single loop, 8 passes per block | 6000 | 50.3% |
-| Dual (default) | 6000 | 48.7% |
+| Dual, reproducible mode | 6000 | 48.7% |
 
 **White-box state recovery** (`analysis/state_recovery.py`). The attacker knows
 the whole algorithm, sees 16 blocks, and solves for the entire 2170-bit hidden
@@ -137,7 +141,9 @@ delivered before it.
 | Linear control | **FAIL** at 16 MB (`BRank`, p ≈ 1e-377) |
 | Single loop, 1 pass per block | no failures through 32 GB (test limit) |
 | Single loop, 8 passes per block | no failures through 4 GB (stopped there) |
-| Dual generator (default) | no failures through 1 GB (stopped there) |
+| Dual generator, reproducible mode | no failures through 1 GB (stopped there) |
+| Dual generator, reproducible mode, `--seed 1` | no failures through 256 MB (run continuing) |
+| Dual generator, occluded mode, `--seed 1` | run in progress |
 
 ("Unusual" flags at isolated lengths that never escalate are expected from
 any good generator; only escalating flags or FAIL indicate structure.)
@@ -148,21 +154,23 @@ all of them and is fully recovered, both forwards and backwards. What makes the
 buried state unrecoverable is the Galois-field nonlinearity (S-box inversion
 and RS division) inside that structure. With it, the same attacks return noise.
 
-## Limits that apply to any deterministic generator
+## Limits
 
-- **The seed is the ceiling.** Mixing never adds entropy, so the output can be
-  no less guessable than the seed. With `--seed 1` the output passes every
-  statistical test, yet `analysis/seed_search.py` recovers the seed from one
-  32-byte block on its second guess and regenerates the stream exactly; a
-  5-digit seed falls in seconds. Seed with at least 32 bytes from the OS (the
-  CLI does this when `--seed` is omitted): searching 2^256 seeds is out of
-  reach for any hardware.
+- **In reproducible mode the seed is the ceiling.** A deterministic loop, however
+  deep or internally reseeded, has exactly one future per seed, and an attacker
+  who knows the algorithm can simply run it. With `--reproducible --seed 1` the
+  output passes every statistical test, yet `analysis/seed_search.py` recovers
+  the seed from one 32-byte block on its second guess and regenerates the
+  stream exactly. Occluded mode closes this: against `clr --seed 1` the same
+  search tries 1,065,792 candidates, including the true seed `1`, and none
+  reproduces the output. The trade-off is inherent: if a seed can reproduce the
+  stream for you, it can reproduce it for anyone who guesses it.
 - **Past output** is protected by the dual generator's one-way closure, not by
   the single loop. The single loop is invertible by design: anyone who captures
   its state can run it backwards.
-- **Recovery after a compromise** needs real entropy. The twin's reseeding is
-  deterministic, so it adds none. Call `clr_dual_absorb` with fresh OS entropy
-  periodically to lock out an attacker who once saw the state.
+- **Recovery after a compromise** needs real entropy, which occluded mode adds
+  every 64 blocks: an attacker who once saw the full state loses it at the
+  next reseed. In reproducible mode, call `clr_dual_absorb` yourself.
 - **Not constant-time.** S-box lookups and data-dependent correction locations
   can leak through cache timing on shared hardware.
 - **Speed.** About 1.2 MiB/s for the dual generator and 2.5 MiB/s for a single
@@ -173,18 +181,20 @@ and RS division) inside that structure. With it, the same attacks return noise.
 ```sh
 make                         # build/clr, build/test_clr, build/libclr.so, linear control
 make test                    # unit tests + re-verification of every generated constant
-./build/clr --seed abc --hex 64          # dual generator
-./build/clr --single --seed abc --hex 64 # one bare loop
+./build/clr --seed abc --hex 64                # dual, occluded: differs every run
+./build/clr --reproducible --seed abc --hex 64 # dual, depends on the seed only
+./build/clr --single --seed abc --hex 64       # one bare loop
 ./build/clr | RNG_test stdin             # PractRand, if installed
 python3 analysis/burial.py
 python3 analysis/linear_complexity.py
 python3 analysis/state_recovery.py
 python3 analysis/backtrack.py
-python3 analysis/seed_search.py 1        # why the seed must be large
+python3 analysis/seed_search.py 1        # reproducible vs occluded mode
 ```
 
-The C API is in `src/clr.h`. The dual generator has `clr_dual_init`,
-`clr_dual_fill`, `clr_dual_u64` and `clr_dual_absorb`. A single loop has
+The C API is in `src/clr.h`. The dual generator has `clr_dual_init_occluded`
+(default) and `clr_dual_init` (reproducible), then `clr_dual_fill`,
+`clr_dual_u64` and `clr_dual_absorb`. A single loop has
 `clr_init`, `clr_fill`, `clr_u64`, `clr_absorb` and `clr_round`/`clr_unround`.
 
 ## Layout
@@ -192,9 +202,10 @@ The C API is in `src/clr.h`. The dual generator has `clr_dual_init`,
 | Path | Contents |
 |---|---|
 | `src/clr.c`, `src/clr.h` | one CLR loop; the API for both generators |
-| `src/clr_dual.c` | the dual generator: twin coupling and the feed-forward closure |
+| `src/clr_dual.c` | the dual generator: twin coupling, the feed-forward closure, occluded reseeding |
+| `src/clr_entropy.c` | OS entropy for the occluded twin (`getentropy`) |
 | `src/clr_tables.h` | generated constants (Gold masks, GF(2^8) tables, S-box) |
 | `src/clr_cli.c` | command-line streamer |
 | `tools/gen_tables.py` | derives the constants. It proves both Gold polynomials primitive and checks the preferred-pair construction's three-valued cross-correlation exhaustively at n = 7 and 13 |
-| `tests/test_clr.c` | tables, Gold stepping, word-parallel vs reference steps, exact invertibility over 10,000 random states, dual `P` invertible and ratchet = `P(S) ⊕ S`, seed avalanche, known-answer vectors |
+| `tests/test_clr.c` | tables, Gold stepping, word-parallel vs reference steps, exact invertibility over 10,000 random states, dual `P` invertible and ratchet = `P(S) ⊕ S`, occluded mode not reproducible and reseeding on schedule, seed avalanche, known-answer vectors |
 | `analysis/` | burial, Berlekamp–Massey, state-recovery, backtracking and seed-search attacks (Python, via ctypes) |

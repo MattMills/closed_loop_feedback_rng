@@ -350,6 +350,33 @@ static void test_dual_seeding_and_fill(void)
     CHECK(!memcmp(x, expect, CLR_BLOCK), "known-answer vector for dual seed \"abc\" changed");
 }
 
+static void test_occluded(void)
+{
+    uint8_t x[CLR_BLOCK], y[CLR_BLOCK], r[CLR_BLOCK];
+    clr_dual a, b, rep;
+    clr_dual_init_occluded(&a, "1", 1, 0, 0);
+    clr_dual_init_occluded(&b, "1", 1, 0, 0);
+    clr_dual_init(&rep, "1", 1, 0);
+    clr_dual_fill(&a, x, sizeof x);
+    clr_dual_fill(&b, y, sizeof y);
+    clr_dual_fill(&rep, r, sizeof r);
+    CHECK(memcmp(x, y, sizeof x), "two occluded generators with the same seed produced the same output");
+    CHECK(memcmp(x, r, sizeof x) && memcmp(y, r, sizeof y), "occluded output equals the reproducible output for its seed");
+    CHECK(a.reseed_every == CLR_RESEED_BLOCKS && rep.reseed_every == 0, "reseed interval");
+
+    /* reseeding happens on schedule and changes only what follows it */
+    clr_dual c;
+    clr_dual_init_occluded(&c, "1", 1, 0, 3);
+    for (unsigned k = 1; k <= 7; k++) {
+        clr_dual before = c;
+        uint8_t o[CLR_BLOCK];
+        clr_dual_block(&c, o);
+        CHECK(c.since_reseed == k % 3, "since_reseed %u after block %u", c.since_reseed, k);
+        if (k % 3 == 0)
+            CHECK(memcmp(c.b.cell, before.b.cell, sizeof c.b.cell), "twin unchanged after a reseed");
+    }
+}
+
 int main(void)
 {
     CHECK(clr_state_size() == sizeof(clr_state), "state size");
@@ -365,6 +392,7 @@ int main(void)
     test_known_answer();
     test_dual_structure();
     test_dual_seeding_and_fill();
+    test_occluded();
     if (failures) {
         printf("%d check(s) failed\n", failures);
         return 1;

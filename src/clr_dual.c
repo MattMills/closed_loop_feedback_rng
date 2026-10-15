@@ -84,8 +84,29 @@ void clr_dual_absorb(clr_dual *d, const void *data, size_t len)
     d->buf_pos = CLR_BLOCK;
 }
 
+/* OS entropy into the occluded twin only; it reaches the output solely through the loop. */
+static void reseed_twin(clr_dual *d)
+{
+    uint8_t ent[32];
+    clr_os_entropy(ent, sizeof ent);
+    clr_absorb(&d->b, ent, sizeof ent);
+    wipe(ent, sizeof ent);
+    d->since_reseed = 0;
+}
+
+void clr_dual_init_occluded(clr_dual *d, const void *seed, size_t len, uint32_t rounds, uint32_t reseed_every)
+{
+    clr_dual_init(d, seed, len, rounds);
+    reseed_twin(d);
+    clr_dual_ratchet(d);
+    clr_dual_ratchet(d);
+    d->reseed_every = reseed_every ? reseed_every : CLR_RESEED_BLOCKS;
+}
+
 void clr_dual_block(clr_dual *d, uint8_t out[CLR_BLOCK])
 {
+    if (d->reseed_every && ++d->since_reseed >= d->reseed_every)
+        reseed_twin(d);
     clr_dual_ratchet(d);
     for (unsigned b = 0; b < CLR_BLOCK; b++)
         out[b] = d->a.cell[0][b] ^ d->a.cell[0][b + CLR_BLOCK];

@@ -64,6 +64,8 @@ class DualState(ctypes.Structure):
         ("b", State),
         ("buf_pos", ctypes.c_uint32),
         ("buf", ctypes.c_uint8 * BLOCK),
+        ("reseed_every", ctypes.c_uint32),
+        ("since_reseed", ctypes.c_uint32),
     ]
 
     def copy(self):
