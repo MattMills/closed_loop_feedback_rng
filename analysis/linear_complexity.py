@@ -48,16 +48,16 @@ def predict(bits, train, C):
     return hits / (len(bits) - train)
 
 
-def cli_bits(binary, rounds, nblocks, bit=0):
+def cli_bits(binary, rounds, nblocks, bit=0, single=True):
     """Output bit number `bit` of each 32-byte block.
 
     Each block is 256 different readouts of the state, so the right linear
     attack follows one bit position from block to block: for a linear design
     that sequence obeys a recurrence no longer than the state.
     """
-    out = subprocess.run([os.path.join(ROOT, "build", binary), "--seed", "linear-complexity",
-                          "--rounds", str(rounds), "--bytes", str(32 * nblocks)],
-                         check=True, capture_output=True).stdout
+    args = [os.path.join(ROOT, "build", binary), "--seed", "linear-complexity",
+            "--rounds", str(rounds), "--bytes", str(32 * nblocks)] + (["--single"] if single else [])
+    out = subprocess.run(args, check=True, capture_output=True).stdout
     return [(out[32 * t + bit // 8] >> (bit % 8)) & 1 for t in range(nblocks)]
 
 
@@ -70,15 +70,18 @@ def gold_bits(nbits):
 
 CASES = [
     ("embedded Gold pair on its own (122 state bits)", lambda n: gold_bits(n)),
-    ("CLR architecture, all-linear control, output bit 0", lambda n: cli_bits("clr_linear_control", 8, n, 0)),
-    ("CLR architecture, all-linear control, output bit 137", lambda n: cli_bits("clr_linear_control", 8, n, 137)),
-    ("CLR, 1 pass per block, output bit 0", lambda n: cli_bits("clr", 1, n, 0)),
-    ("CLR, 8 passes per block (default), output bit 0", lambda n: cli_bits("clr", 8, n, 0)),
-    ("CLR, 8 passes per block (default), output bit 137", lambda n: cli_bits("clr", 8, n, 137)),
+    ("single loop, all-linear control, output bit 0", lambda n: cli_bits("clr_linear_control", 8, n, 0)),
+    ("single loop, all-linear control, output bit 137", lambda n: cli_bits("clr_linear_control", 8, n, 137)),
+    ("dual, all-linear control, output bit 0", lambda n: cli_bits("clr_linear_control", 8, n, 0, False)),
+    ("single loop, 1 pass per block, output bit 0", lambda n: cli_bits("clr", 1, n, 0)),
+    ("single loop, 8 passes per block, output bit 0", lambda n: cli_bits("clr", 8, n, 0)),
+    ("single loop, 8 passes per block, output bit 137", lambda n: cli_bits("clr", 8, n, 137)),
+    ("dual (default), output bit 0", lambda n: cli_bits("clr", 8, n, 0, False)),
+    ("dual (default), output bit 137", lambda n: cli_bits("clr", 8, n, 137, False)),
 ]
 
 print(f"Berlekamp-Massey on the first {N} bits of each sequence, then predict the next {TEST}")
-print(f"(state = 2170 bits; a random sequence has linear complexity ~{N // 2} and is predicted ~50%)\n")
+print(f"(state = 2170 bits single, 4340 dual; a random sequence has linear complexity ~{N // 2} and is predicted ~50%)\n")
 for name, gen in CASES:
     bits = gen(N + TEST)
     L, C = berlekamp_massey(bits[:N])

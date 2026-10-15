@@ -35,10 +35,6 @@ def output_bits(lib, x, nblocks):
     return np.unpackbits(np.frombuffer(lib.blocks(s, nblocks), dtype=np.uint8), bitorder="little")
 
 
-def to_int(bits):
-    return int.from_bytes(np.packbits(bits, bitorder="little").tobytes(), "little")
-
-
 def attack(lib, label):
     # 1. Model: affine response of every output bit to every hidden state bit.
     zero = np.zeros(n, dtype=np.uint8)
@@ -48,31 +44,14 @@ def attack(lib, label):
         e = zero.copy()
         e[i] = 1
         cols[i] = output_bits(lib, e, T + P) ^ y0
-    obs_rows = cols[:, : 128 * 2 * T].T                 # equation r: sum_i M[r,i] x_i = y[r] ^ y0[r]
+    obs_rows = cols[:, : 256 * T].T                     # equation r: sum_i M[r,i] x_i = y[r] ^ y0[r]
 
     # 2. Victim: a secret random state; the attacker sees T blocks.
     secret = rng.integers(0, 2, n, dtype=np.uint8)
     y = output_bits(lib, secret, T + P)
 
-    # 3. Gaussian elimination over GF(2) on rows packed as ints (bit n = right-hand side).
-    rows = [to_int(r) | (int(b) << n) for r, b in zip(obs_rows, y[: 256 * T] ^ y0[: 256 * T])]
-    pivots, inconsistent = {}, 0
-    for r in rows:
-        for col, pr in pivots.items():
-            if (r >> col) & 1:
-                r ^= pr
-        low = r & ((1 << n) - 1)
-        if not low:
-            inconsistent += r >> n                      # 0 = 1: the model does not fit the data
-            continue
-        col = low.bit_length() - 1
-        for c2 in list(pivots):
-            if (pivots[c2] >> col) & 1:
-                pivots[c2] ^= r
-        pivots[col] = r
-    xhat = np.zeros(n, dtype=np.uint8)
-    for col, pr in pivots.items():
-        xhat[col] = (pr >> n) & 1                       # free variables set to 0
+    # 3. Gaussian elimination over GF(2); contradictions = equations no state satisfies.
+    xhat, rank, inconsistent = clrmod.gf2_solve(obs_rows, y[: 256 * T] ^ y0[: 256 * T])
 
     # 4. Predict the P blocks the attacker never saw.
     pred = (y0 ^ (xhat @ cols % 2).astype(np.uint8))[256 * T:]
@@ -81,7 +60,7 @@ def attack(lib, label):
     layers = [(xhat[k * 512:(k + 1) * 512] == secret[k * 512:(k + 1) * 512]).mean() for k in range(4)]
     gold = (xhat[2048:] == secret[2048:]).mean()
     print(f"\n{label}")
-    print(f"  equations {len(rows)}, rank {len(pivots)} of {n}, contradictory equations {inconsistent}")
+    print(f"  equations {len(obs_rows)}, rank {rank} of {n}, contradictory equations {inconsistent}")
     print(f"  model fits the {T} observed blocks:   {seen_acc:7.2%} of bits")
     print(f"  predicts the {P} unseen blocks:       {future_acc:7.2%} of bits")
     print(f"  hidden state bits recovered:   L0 {layers[0]:.0%}  L1 {layers[1]:.0%}  "

@@ -7,6 +7,12 @@ the next with a Galois code. Only the outer layer is ever seen. The inner
 layers and the embedded Gold generators feed the outer layer's inputs and
 outputs but never appear in the output.
 
+Two of these loops run as a pair. One is the exterior generator; the other is
+an interior twin that is never output. The pair reseeds each other in a
+second-order XOR loop, and each block closes with a feed-forward self-mix, so
+a captured state can't be run backwards. The dual generator is the default
+(`clr_dual_*`, `./build/clr`); `--single` selects one bare loop.
+
 > Status: experimental design. It passes every attack in `analysis/` (below),
 > but it has not been independently cryptanalysed, and passing tests is not a
 > proof. Treat it as research until it has been.
@@ -37,6 +43,27 @@ outputs but never appear in the output.
 
 Total hidden state: 4 × 512 + 122 = 2170 bits.
 
+### Dual generator: second-order loop with a closing self-mix
+
+```
+            ┌───────────── one output block ─────────────┐
+ S = (A, B) │  repeat 8×:  A: one CLR pass                │
+            │              B: one CLR pass                │
+            │              A.L3 ^= B.L2 (transposed)      │──▶ S ← P(S) ⊕ S ──▶ output = fold(A.L0)
+            │              B.L3 ^= A.L2 (shifted 3,5)     │
+            └──────────────────── P ─────────────────────┘
+```
+
+| Idea | Mechanism |
+|---|---|
+| Dual generator, operating independently | A (exterior) and B (interior twin) are complete CLR loops with their own lattices and Gold pairs, seeded with domain separation |
+| Continuous reseeding in a second-order loop | Every pass, each generator's deepest layer is XORed with the other's interior layer, through different cell permutations so they never mirror each other |
+| Exterior interiority | B is never output, and the coupling only touches interior layers (L2, L3). B reaches the output only by being buried through A's own loop. External entropy (`clr_dual_absorb`) enters through B |
+| Multi-order XOR loop that closes, then self-mixes | Each block applies `S ← P(S) ⊕ S` to the joint 4340-bit state, where `P` is the 8 coupled passes. `P` is invertible; the feed-forward XOR of the state with its own starting value is what makes the step one-way |
+
+Iterating a one-way step merges states, but slowly: the joint state keeps
+about half its 4340 bits, far more than any seed, so no real entropy is lost.
+
 ## What an attacker gets
 
 Each attack runs against CLR and against a **linear control**: the same
@@ -57,15 +84,26 @@ difference. Ideal is 0.500 everywhere.
 From pass 3 on, every layer and every output bit flip with probability 0.5.
 The worst of the 256 output bits stays within the range a fair coin gives.
 
+Dual generator: a bit flipped in the interior twin, after one block.
+
+| Passes per block | 1 | 2 | 3 | 4 | 8 (default) |
+|---|---|---|---|---|---|
+| Output bits changed | 0.000 | 0.165 | 0.433 | 0.499 | 0.501 |
+
+The twin is fully buried in the output from 4 passes per block on, so the
+default of 8 gives a 2× margin on that path.
+
 **Linear-recurrence attack** (`analysis/linear_complexity.py`). Berlekamp–Massey
 on 12,000 bits, then predict the next 4,000.
 
 | Sequence | Linear complexity | Predicted |
 |---|---|---|
 | Embedded Gold pair on its own | 122 | 100% |
-| Linear control, per output bit | 1147 | 100% |
-| CLR, 1 pass per block | 5999 (random: ~6000) | 48.5% |
-| CLR, 8 passes per block | 6000 | 50.3% |
+| Single loop, linear control, per output bit | 1147 | 100% |
+| Dual, linear control, per output bit | 4336 | 100% |
+| Single loop, 1 pass per block | 5999 (random: ~6000) | 48.5% |
+| Single loop, 8 passes per block | 6000 | 50.3% |
+| Dual (default) | 6000 | 48.7% |
 
 **White-box state recovery** (`analysis/state_recovery.py`). The attacker knows
 the whole algorithm, sees 16 blocks, and solves for the entire 2170-bit hidden
@@ -80,58 +118,78 @@ state over GF(2).
 fits it. The "fits 77% of observed bits" line the script prints is what fitting
 2170 free unknowns to 4096 bits gives by construction.)
 
+**Backtracking** (`analysis/backtrack.py`). The attacker captures the complete
+internal state right after a block is delivered and tries to regenerate output
+delivered before it.
+
+| Target | Attack | Result |
+|---|---|---|
+| Single loop | run it backwards (`clr_unround`) | **64/64** past blocks regenerated exactly |
+| Dual, linear control | run `P` backwards | fails (50.4% of bits) |
+| Dual, linear control | solve `P(x) ⊕ x = captured` over GF(2) and enumerate every solution | **broken**: 16 candidates, the true previous state among them |
+| Dual (CLR) | run `P` backwards | fails (51.2%) |
+| Dual (CLR) | solve `P(x) ⊕ x = captured` over GF(2) and enumerate every solution | fails: true state not among the candidates; previous block at chance |
+
 **PractRand 0.95** (`./build/clr | RNG_test stdin`):
 
 | Build | Result |
 |---|---|
 | Linear control | **FAIL** at 16 MB (`BRank`, p ≈ 1e-377) |
-| CLR, 1 pass per block | no failures through 4 GB (run continuing) |
-| CLR, 8 passes per block (default) | no failures through 512 MB (run continuing) |
+| CLR, 1 pass per block | no failures through 16 GB (run continuing) |
+| CLR, 8 passes per block | no failures through 2 GB (run continuing) |
+| Dual generator (default) | queued |
 
 ("Unusual" flags at isolated lengths that never escalate are expected from
 any good generator; only escalating flags or FAIL indicate structure.)
 
-**The conclusion.** Spatial non-locality, layering and closed-loop feedback
-hide nothing on their own: the linear control has all three and is fully
-recovered. What makes the buried state unrecoverable is the Galois-field
-nonlinearity (S-box inversion and RS division) inside that structure. With it,
-the same attacks return noise, even after a single pass.
+**The conclusion.** Spatial non-locality, layering, closed-loop feedback and
+the dual feed-forward closure hide nothing on their own: the linear control has
+all of them and is fully recovered, both forwards and backwards. What makes the
+buried state unrecoverable is the Galois-field nonlinearity (S-box inversion
+and RS division) inside that structure. With it, the same attacks return noise.
 
 ## Limits that apply to any deterministic generator
 
 - **The seed is the ceiling.** Mixing never adds entropy, so the output can be
   no less guessable than the seed. Seed with at least 32 bytes from the OS (the
   CLI does this when `--seed` is omitted).
-- **No forward secrecy.** The loop is invertible by design, so anyone who
-  captures the complete internal state can run it backwards and regenerate past
-  output. `clr_absorb` can mix in fresh entropy; a one-way ratchet would be
-  needed to protect the past.
+- **Past output** is protected by the dual generator's one-way closure, not by
+  the single loop. The single loop is invertible by design: anyone who captures
+  its state can run it backwards.
+- **Recovery after a compromise** needs real entropy. The twin's reseeding is
+  deterministic, so it adds none. Call `clr_dual_absorb` with fresh OS entropy
+  periodically to lock out an attacker who once saw the state.
 - **Not constant-time.** S-box lookups and data-dependent correction locations
   can leak through cache timing on shared hardware.
-- **Speed.** About 2.5 MiB/s at 8 passes (portable C, unvectorised).
+- **Speed.** About 1.2 MiB/s for the dual generator and 2.5 MiB/s for a single
+  loop, at 8 passes (portable C, unvectorised).
 
 ## Build and run
 
 ```sh
 make                         # build/clr, build/test_clr, build/libclr.so, linear control
 make test                    # unit tests + re-verification of every generated constant
-./build/clr --seed abc --hex 64
-./build/clr | RNG_test stdin # PractRand, if installed
+./build/clr --seed abc --hex 64          # dual generator
+./build/clr --single --seed abc --hex 64 # one bare loop
+./build/clr | RNG_test stdin             # PractRand, if installed
 python3 analysis/burial.py
 python3 analysis/linear_complexity.py
 python3 analysis/state_recovery.py
+python3 analysis/backtrack.py
 ```
 
-The C API is in `src/clr.h`: `clr_init`, `clr_fill`, `clr_u64`, `clr_absorb`,
-`clr_round`/`clr_unround`.
+The C API is in `src/clr.h`. The dual generator has `clr_dual_init`,
+`clr_dual_fill`, `clr_dual_u64` and `clr_dual_absorb`. A single loop has
+`clr_init`, `clr_fill`, `clr_u64`, `clr_absorb` and `clr_round`/`clr_unround`.
 
 ## Layout
 
 | Path | Contents |
 |---|---|
-| `src/clr.c`, `src/clr.h` | the generator |
+| `src/clr.c`, `src/clr.h` | one CLR loop; the API for both generators |
+| `src/clr_dual.c` | the dual generator: twin coupling and the feed-forward closure |
 | `src/clr_tables.h` | generated constants (Gold masks, GF(2^8) tables, S-box) |
 | `src/clr_cli.c` | command-line streamer |
 | `tools/gen_tables.py` | derives the constants. It proves both Gold polynomials primitive and checks the preferred-pair construction's three-valued cross-correlation exhaustively at n = 7 and 13 |
-| `tests/test_clr.c` | tables, Gold stepping, word-parallel vs reference steps, exact invertibility over 10,000 random states, seed avalanche, known-answer vector |
-| `analysis/` | burial, Berlekamp–Massey and state-recovery attacks (Python, via ctypes) |
+| `tests/test_clr.c` | tables, Gold stepping, word-parallel vs reference steps, exact invertibility over 10,000 random states, dual `P` invertible and ratchet = `P(S) ⊕ S`, seed avalanche, known-answer vectors |
+| `analysis/` | burial, Berlekamp–Massey, state-recovery and backtracking attacks (Python, via ctypes) |

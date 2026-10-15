@@ -57,3 +57,26 @@ for origin, flip in ORIGINS.items():
         print(f"{r + 1:>6} " + "".join(f"{v:>8.3f}" for v in frac[r]) + f"   {0.5 + worst if p[r][np.abs(p[r]-0.5).argmax()] > .5 else 0.5 - worst:>10.3f} ({worst / sigma:4.1f})")
 print(f"\nworst-bit z: max over {8 * clr.BLOCK} output bits of |p - 0.5| / sigma; "
       f"for a fair coin this is typically 2.5-3.8 at {trials} trials.")
+
+# ---------------------------------------------------------------- dual generator
+print("\nDual generator: 1-bit difference in the interior twin B (never output), one block")
+print("rounds/block   A outer   A inner   B (all)   output   worst output bit  (z)")
+lib = clr.clr
+for r in (1, 2, 3, 4, 8):
+    acc = np.zeros(4)
+    flips = np.zeros(8 * clr.BLOCK)
+    for t in range(trials):
+        x = rng.integers(0, 2, 2 * clr.STATE_BITS, dtype=np.uint8)
+        y = x.copy()
+        y[clr.STATE_BITS + int(rng.integers(0, clr.STATE_BITS))] ^= 1
+        a, b = clr.DualState.from_bits(x, r), clr.DualState.from_bits(y, r)
+        lib.dual_ratchet(a)
+        lib.dual_ratchet(b)
+        xa, xb = a.bits(), b.bits()
+        d = xa ^ xb
+        out = clr.fold_bits(xa) ^ clr.fold_bits(xb)
+        acc += [d[:512].mean(), d[512:clr.STATE_BITS].mean(), d[clr.STATE_BITS:].mean(), out.mean()]
+        flips += out
+    acc /= trials
+    worst = np.abs(flips / trials - 0.5).max()
+    print(f"{r:>13} " + "".join(f"{v:>10.3f}" for v in acc) + f"   {worst / (0.5 / np.sqrt(trials)):>14.1f}")

@@ -1,5 +1,6 @@
 /* Unit tests.  Includes the implementation directly to reach its internal steps. */
 #include "../src/clr.c"
+#include "../src/clr_dual.c"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -269,9 +270,90 @@ static void test_known_answer(void)
     CHECK(!memcmp(out, expect, CLR_BLOCK), "known-answer vector for seed \"abc\" changed");
 }
 
+static void random_dual(clr_dual *d)
+{
+    memset(d, 0, sizeof *d);
+    random_state(&d->a);
+    random_state(&d->b);
+    d->buf_pos = CLR_BLOCK;
+}
+
+static int same_dual(const clr_dual *x, const clr_dual *y)
+{
+    return same_state(&x->a, &y->a) && same_state(&x->b, &y->b);
+}
+
+static void test_dual_structure(void)
+{
+    for (int t = 0; t < 2000; t++) {
+        clr_dual x, y;
+        random_dual(&x);
+        y = x;
+        clr_dual_permute(&x);
+        clr_dual_unpermute(&x);
+        CHECK(same_dual(&x, &y), "dual permutation P is not invertible");
+
+        /* the ratchet S <- P(S) xor S cannot be undone by running P backwards */
+        clr_dual_ratchet(&x);
+        clr_dual_unpermute(&x);
+        CHECK(!same_dual(&x, &y), "ratchet was undone by P^-1");
+
+        /* and it is the feed-forward that makes the difference */
+        clr_dual p = y, r = y;
+        clr_dual_permute(&p);
+        clr_dual_ratchet(&r);
+        xor_state(&p.a, &y.a);
+        xor_state(&p.b, &y.b);
+        CHECK(same_dual(&p, &r), "ratchet != P(S) xor S");
+    }
+    /* B influences A and A influences B within one block */
+    clr_dual x, y;
+    random_dual(&x);
+    y = x;
+    y.b.cell[CLR_LAYERS - 1][0] ^= 1;
+    clr_dual_ratchet(&x);
+    clr_dual_ratchet(&y);
+    unsigned da = 0;
+    for (unsigned c = 0; c < CLR_CELLS; c++) da += (unsigned)__builtin_popcount(x.a.cell[0][c] ^ y.a.cell[0][c]);
+    CHECK(da > 200 && da < 312, "one bit in the twin changed only %u of 512 bits of A's outer layer", da);
+}
+
+static void test_dual_seeding_and_fill(void)
+{
+    clr_dual a, b;
+    clr_dual_init(&a, "abc", 3, 0);
+    CHECK(memcmp(a.a.cell, a.b.cell, sizeof a.a.cell), "exterior and twin start identical");
+    clr_dual_init(&b, "abc", 3, 0);
+    uint8_t x[1000], y[1000];
+    clr_dual_fill(&a, x, sizeof x);
+    for (size_t off = 0, n = 1; off < sizeof y; off += n, n = n % 37 + 1) {
+        if (off + n > sizeof y) n = sizeof y - off;
+        clr_dual_fill(&b, y + off, n);
+    }
+    CHECK(!memcmp(x, y, sizeof x), "chunked dual fill differs from one-shot fill");
+
+    clr_state single;
+    clr_init(&single, "abc", 3, 0);
+    uint8_t s[CLR_BLOCK];
+    clr_fill(&single, s, sizeof s);
+    CHECK(memcmp(s, x, sizeof s), "dual output equals single-loop output");
+
+    clr_dual c;
+    clr_dual_init(&c, "abc", 3, 0);
+    clr_dual_absorb(&c, "fresh entropy", 13);
+    clr_dual_fill(&c, y, CLR_BLOCK);
+    CHECK(memcmp(x, y, CLR_BLOCK), "absorbing into the twin did not change the output");
+
+    static const uint8_t expect[CLR_BLOCK] = {
+#include "kat_dual_abc.inc"
+    };
+    CHECK(!memcmp(x, expect, CLR_BLOCK), "known-answer vector for dual seed \"abc\" changed");
+}
+
 int main(void)
 {
     CHECK(clr_state_size() == sizeof(clr_state), "state size");
+    CHECK(clr_dual_size() == sizeof(clr_dual), "dual size");
     test_tables();
     test_gold();
     test_half_step_matches_reference();
@@ -281,6 +363,8 @@ int main(void)
     test_fill();
     test_seed_avalanche();
     test_known_answer();
+    test_dual_structure();
+    test_dual_seeding_and_fill();
     if (failures) {
         printf("%d check(s) failed\n", failures);
         return 1;

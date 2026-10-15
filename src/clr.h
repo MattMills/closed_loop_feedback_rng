@@ -60,4 +60,40 @@ uint64_t clr_u64(clr_state *st);
 
 size_t clr_state_size(void);
 
+/*
+ * Dual generator (src/clr_dual.c): the recommended interface.
+ *
+ * Two complete CLR loops run side by side.  A is the exterior generator (its
+ * folded outer layer is the output); B is an interior twin that is never
+ * output.  On every pass they reseed each other through their interior
+ * layers only (second-order XOR loop: A.L3 ^= B.L2, B.L3 ^= A.L2, each
+ * through a different cell permutation).  Each output block then closes the
+ * loop with a feed-forward self-mix of the joint state,
+ *
+ *     S  <-  P(S) xor S          (P = `rounds` passes of both loops + coupling)
+ *
+ * P is invertible, but P(S) xor S is not: a captured state cannot be run
+ * backwards to earlier output (backtracking resistance).  External entropy
+ * (clr_dual_absorb) enters through the interior twin.
+ */
+typedef struct clr_dual {
+    clr_state a;                        /* exterior generator */
+    clr_state b;                        /* interior twin, never output */
+    uint32_t  buf_pos;
+    uint8_t   buf[CLR_BLOCK];
+} clr_dual;
+
+void clr_dual_init(clr_dual *d, const void *seed, size_t len, uint32_t rounds);
+void clr_dual_absorb(clr_dual *d, const void *data, size_t len);
+void clr_dual_block(clr_dual *d, uint8_t out[CLR_BLOCK]);
+void clr_dual_fill(clr_dual *d, void *out, size_t len);
+uint64_t clr_dual_u64(clr_dual *d);
+
+/* The pieces of one block step, exposed for tests and analysis. */
+void clr_dual_permute(clr_dual *d);     /* P: invertible */
+void clr_dual_unpermute(clr_dual *d);   /* P^-1 */
+void clr_dual_ratchet(clr_dual *d);     /* S <- P(S) xor S: one-way */
+
+size_t clr_dual_size(void);
+
 #endif

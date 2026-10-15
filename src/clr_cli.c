@@ -1,8 +1,9 @@
 /*
  * clr -- stream generator output.
  *
- *   clr [--seed TEXT | --seed-hex HEX] [--rounds N] [--bytes N | --hex N]
+ *   clr [--single] [--seed TEXT | --seed-hex HEX] [--rounds N] [--bytes N | --hex N]
  *
+ * Default is the dual generator (clr_dual_*); --single uses one bare CLR loop.
  * With no --bytes/--hex, raw bytes are written to stdout until the pipe closes
  * (e.g. `clr | RNG_test stdin`).  With no seed, 32 bytes from /dev/urandom.
  */
@@ -14,7 +15,7 @@
 
 static void usage(void)
 {
-    fprintf(stderr, "usage: clr [--seed TEXT | --seed-hex HEX] [--rounds N] [--bytes N | --hex N]\n");
+    fprintf(stderr, "usage: clr [--single] [--seed TEXT | --seed-hex HEX] [--rounds N] [--bytes N | --hex N]\n");
     exit(2);
 }
 
@@ -30,13 +31,15 @@ int main(int argc, char **argv)
 {
     uint8_t seed[4096];
     size_t seed_len = 0;
-    int have_seed = 0, hex = 0;
+    int have_seed = 0, hex = 0, single = 0;
     unsigned long rounds = 0;
     unsigned long long count = 0;
     int bounded = 0;
 
     for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "--seed") && i + 1 < argc) {
+        if (!strcmp(argv[i], "--single")) {
+            single = 1;
+        } else if (!strcmp(argv[i], "--seed") && i + 1 < argc) {
             seed_len = strlen(argv[++i]);
             if (seed_len > sizeof seed) usage();
             memcpy(seed, argv[i], seed_len);
@@ -74,14 +77,19 @@ int main(int argc, char **argv)
         seed_len = 32;
     }
 
-    clr_state st;
-    clr_init(&st, seed, seed_len, (uint32_t)rounds);
+    static clr_state st;
+    static clr_dual dual;
+    if (single)
+        clr_init(&st, seed, seed_len, (uint32_t)rounds);
+    else
+        clr_dual_init(&dual, seed, seed_len, (uint32_t)rounds);
+    memset(seed, 0, sizeof seed);
 
     uint8_t buf[1 << 16];
     if (hex) {
         while (count) {
             size_t n = count < sizeof buf ? (size_t)count : sizeof buf;
-            clr_fill(&st, buf, n);
+            if (single) clr_fill(&st, buf, n); else clr_dual_fill(&dual, buf, n);
             for (size_t k = 0; k < n; k++)
                 printf("%02x", buf[k]);
             count -= n;
@@ -96,7 +104,7 @@ int main(int argc, char **argv)
             if (count < n) n = (size_t)count;
             count -= n;
         }
-        clr_fill(&st, buf, n);
+        if (single) clr_fill(&st, buf, n); else clr_dual_fill(&dual, buf, n);
         if (fwrite(buf, 1, n, stdout) != n)
             return 0;                           /* reader closed the pipe */
     }
