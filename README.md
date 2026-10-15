@@ -151,8 +151,12 @@ and RS division) inside that structure. With it, the same attacks return noise.
 ## Limits that apply to any deterministic generator
 
 - **The seed is the ceiling.** Mixing never adds entropy, so the output can be
-  no less guessable than the seed. Seed with at least 32 bytes from the OS (the
-  CLI does this when `--seed` is omitted).
+  no less guessable than the seed. With `--seed 1` the output passes every
+  statistical test, yet `analysis/seed_search.py` recovers the seed from one
+  32-byte block on its second guess and regenerates the stream exactly; a
+  5-digit seed falls in seconds. Seed with at least 32 bytes from the OS (the
+  CLI does this when `--seed` is omitted): searching 2^256 seeds is out of
+  reach for any hardware.
 - **Past output** is protected by the dual generator's one-way closure, not by
   the single loop. The single loop is invertible by design: anyone who captures
   its state can run it backwards.
@@ -176,6 +180,7 @@ python3 analysis/burial.py
 python3 analysis/linear_complexity.py
 python3 analysis/state_recovery.py
 python3 analysis/backtrack.py
+python3 analysis/seed_search.py 1        # why the seed must be large
 ```
 
 The C API is in `src/clr.h`. The dual generator has `clr_dual_init`,
@@ -192,4 +197,4 @@ The C API is in `src/clr.h`. The dual generator has `clr_dual_init`,
 | `src/clr_cli.c` | command-line streamer |
 | `tools/gen_tables.py` | derives the constants. It proves both Gold polynomials primitive and checks the preferred-pair construction's three-valued cross-correlation exhaustively at n = 7 and 13 |
 | `tests/test_clr.c` | tables, Gold stepping, word-parallel vs reference steps, exact invertibility over 10,000 random states, dual `P` invertible and ratchet = `P(S) ⊕ S`, seed avalanche, known-answer vectors |
-| `analysis/` | burial, Berlekamp–Massey, state-recovery and backtracking attacks (Python, via ctypes) |
+| `analysis/` | burial, Berlekamp–Massey, state-recovery, backtracking and seed-search attacks (Python, via ctypes) |
