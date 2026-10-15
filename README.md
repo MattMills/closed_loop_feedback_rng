@@ -137,7 +137,7 @@ delivered before it.
 | Linear control | **FAIL** at 16 MB (`BRank`, p ≈ 1e-377) |
 | Single loop, 1 pass per block | no failures through 32 GB (test limit) |
 | Single loop, 8 passes per block | no failures through 4 GB (stopped there) |
-| Dual generator (default) | run in progress |
+| Dual generator (default) | no failures through 1 GB (stopped there) |
 
 ("Unusual" flags at isolated lengths that never escalate are expected from
 any good generator; only escalating flags or FAIL indicate structure.)
